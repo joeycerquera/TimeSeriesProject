@@ -1,2 +1,4 @@
 "# TimeSeriesProject" 
-This is a line from RStudio
+In this project we will present a time series analysis on CO$_2$  emissions of the volcano, Mauna Loa, gathered from the Mauna Loa Observatory in Hawaii. The objective of this analysis is to provide insight on future activity, to reduce the impact to both human and non-human inhabitants. The questions we addressed are whether the CO$_2$  emissions follow a seasonal trend, that is if the volcano has a certain periodicity to its activity. As well as if the activity could accurately be predicted. 
+
+By intuitively graphing, the actual data and acfs/pacfs, and transforming the data, we selected several models based on these prior findings. We then fit the models to the data, and compared the models with various criterions to further stratify and select the most effective model. The model we chose was an $ARIMA(1,1,1)\times(1,1,0)_{12}$, using AICc criteria, and this model was used to effectively forecast the future values in our test set.
