@@ -1,0 +1,931 @@
+---
+title: "Project_Draft"
+author: "Joey Cerquera"
+date: "June 27, 2018"
+output: html_document
+---
+
+---
+output:
+  pdf_document:
+    df_print: kable
+    fig_caption: true
+urlcolor: blue
+---
+\begin{titlepage}
+  \vspace*{18em}{\centering\Huge\
+  \textsl{Predicting CO{\textsubscript{2}} Concentrations with ARIMA}\par}
+  \vspace{1em}
+  {\hfill\itshape \textbf{PSTAT 174 Final Project}\par}
+  \vspace{0em}
+  {\hfill\itshape \textbf{June 8{\textsuperscript{th}, 2018}}}
+  \vfill
+  \begin{flushright}
+    \textbf{\underline{Group Phi:}} \\~\\
+    Uma Kumar \\
+    Jacobo Pereira \\
+    Joey Cerquera\\
+    Khalid Nagib\\
+    Jeff Oliveria
+  \end{flushright}
+\end{titlepage}
+
+\newpage
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(digits = 4)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=60),tidy=TRUE)
+```
+
+```{r data_import, message=FALSE, warning=FALSE, include=FALSE}
+#install.packages("forecast")
+#install.packages('qpcR')
+library(stats)
+library(forecast)
+library(qpcR)
+library(MASS)
+library(readr)
+library(knitr)
+
+co2 <- read_csv("https://docs.google.com/spreadsheets/d/e/2PACX-1vQulcZcSOK9l5iNKU_MsBvdDlgF0qdm9rJfqA3BAxc2Q19YxYsggmZMRRmOpXTbEU76vKAMz5R4RMiS/pub?output=csv", 
+    col_types = cols(month = col_skip()))
+
+mauna_loa <- ts(co2, frequency=12, start=c(1965,1))
+```
+
+# Abstract
+
+In this project we will present a time series analysis on CO$_2$  emissions of the volcano, Mauna Loa, gathered from the Mauna Loa Observatory in Hawaii. The objective of this analysis is to provide insight on future activity, to reduce the impact to both human and non-human inhabitants. The questions we addressed are whether the CO$_2$  emissions follow a seasonal trend, that is if the volcano has a certain periodicity to its activity. As well as if the activity could accurately be predicted. 
+
+By intuitively graphing, the actual data and acfs/pacfs, and transforming the data, we selected several models based on these prior findings. We then fit the models to the data, and compared the models with various criterions to further stratify and select the most effective model. The model we chose was an $ARIMA(1,1,1)\times(1,1,0)_{12}$, using AICc criteria, and this model was used to effectively forecast the future values in our test set.
+
+# 1. Introduction
+
+```{r include=FALSE, results='asis'}
+mauna.raw <- matrix(mauna_loa, ncol=12, byrow=TRUE)
+mauna.raw.df<- as.data.frame(mauna.raw , stringsAsFactors=FALSE)
+colnames(mauna.raw.df) <-  c("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
+#rownames(mauna.raw.df) <- c(1965:1980)
+kable(mauna.raw.df, caption = "Raw Data")
+```
+An estimated 200 billion metric tons of CO$_2$ is released and absorbed into the atmosphere each year by natural occurrence, while humans account for an additional 7 billion metric tons[$[_1]$](https://www.esrl.noaa.gov/gmd/ccgg/trends/). Many scientists believe that the addition of anthropogenic carbon dioxide is too much for nature to handle, so it is important to at least monitor the current levels, while being able to predict future levels can help with planning and economic policy. We tried several models, and ultimately ended up choosing between two SARIMA model. The data has a strong seasonal component, and models tested with no seasonal component all either had roots inside of the unit circle or performed poorly relatively to the SARIMA models during diagnostic testing. 
+
+The data set covers a span of 16 years, from 1965 through 1980. We reserved the final twelve observations as test data, and built the model with the first 180 observations.  More information on the data can be found [here.](	http://datamarket.com/data/list/?q=provider:tsdl) . The fitted mocel did a very good job of predicting the test data, and we concluded that this type of data set is an excellent candidate for predictive modeling using seasonal ARIMA modelling. All work with the data was done with R, using R-Studio, and the written portion/equations were coded with \LaTeX{}.
+
+##1.1 Report Layout
+In **Section 2**, we perform exploratory data analysis, working with the subsetted training data and transforming/differencing in order to ensure stationarity before fitting the model. We tried two different models fit with two different methods, and performed diagnostic testing on both before moving on to forecasting with the better model. **Section 3** provides our conclusions and takeaways from writing this report, while **Section 4** cites references used. Finally, **Section 5** includes all of the code used to compile the report. 
+  
+  \begin{center}\rule{\linewidth}{\linethickness}\end{center}
+  
+\newpage
+# 2. Data Analysis
+```{r test_training_data, include=FALSE}
+#Set up training data/test data. Saved last year (12 observations) for validation of model.
+
+#Training Data = first 15 years of data
+mauna.train <- window(mauna_loa, start=c(1965,1), end=c(1979, 12))
+
+#Validation data = last year (12 observations) of data
+mauna.test <- window(mauna_loa, start=c(1980,1))
+```
+
+##2.1 Plotting Original Data  
+
+Prior to beginning our exploratory data analysis, we split the raw data into a training set and a test set, reserving the last 12 observations for validation, as being able to go out a full year is good for planning purposes. After subsetting the data, we plotted the raw data in order to look at its characteristics and see where we needed to start.
+
+```{r plot_raw_data,echo=FALSE, fig.align="center", fig.width=5, fig.height=3}
+ts.plot(mauna_loa,main = "Raw data",ylab = 'CO2 (ppm)')
+  abline(reg=lm(mauna_loa ~ time(mauna_loa)), col = 2)
+```
+
+When plotting the original data as a time series, it is apparent that there is trend and seasonality. The line fitted is the best fitting line through the data, and though there are flucuations in variance, the data increases monotonically, so there are no sharp changes in behavior or variance. Some transformations of the data are required to stabilize the variance, and differencing appears to be needed to take care of the trend/seasonality in order to obtain a stationary series suitable for forecasting.  
+  
+##2.2 Data Transformations  
+
+We began transforming the training data by executing a box cox power transformation, to see what type of transformation would serve as a good starting point. Using R, we obtained $\lambda=-0.061$, which implies a log transform of the data, as it is close to 0. We also checked the square root transformation to see how it performed.  
+
+```{r boc_cox, echo=FALSE, fig.align="center", fig.width=5, fig.height=3}
+bc = MASS::boxcox(lm(mauna.train ~ time(mauna.train)),plotit = TRUE)
+  lambda = bc$x[which(bc$y == max(bc$y))]
+mauna.train.bc = (1/lambda)*(mauna.train^lambda-1)
+lambda
+```
+  
+The variances resulting from the original data and the three data transformations are summarized in the table below. 
+
+```{r log_transform, include=FALSE}
+mauna.train.log<-log(mauna.train)
+```
+
+```{r sqrt_transform, include=FALSE}
+mauna.train.sqrt<-sqrt(mauna.train)
+```
+
+```{r transform.var, include=FALSE}
+var.raw <- var(mauna.train)
+var.bc <- var(mauna.train.bc)
+var.log <- var(mauna.train.log)
+var.sqrt <- var(mauna.train.sqrt)
+
+variance <- c(format(var.raw, scientific = 0), var.sqrt, var.log, var.bc)
+variance <- as.data.frame(variance, row.names = c('Raw Data', 'Sqrt Transform', 'Log Transform', 'Box Cox'))
+variance
+```
+  
+```{r, echo=FALSE, fig.align="center"}
+kable(variance, format = 'pandoc',caption = "Data Transformation Variances")
+```
+  
+  It is clear that both the Box Cox transformation with $\lambda=-0.061$ and $\lambda=0$ (log transform) did a good job of stabilizing the variance. While the box xox lowers variance the most, the log transform stabilizes the variance well and the trade-off of slightly less variance reduction is worth it since the log is easier to work with for forecasting. Thus, we will proceed with a log transform.  
+  
+  Graphing the transformed data shows that while the variance is stabilized, there is still a definite linear trend and seasonality. Next we will try differencing the data in order to make in stationary.
+  
+```{r transform_plots, echo=FALSE, fig.align="center", fig.width=8, fig.height=3}
+op <- par(mfrow = c(1,2))
+ts.plot(mauna.train,main = "Raw data",ylab = expression(X[t]))
+  abline(reg=lm(mauna.train ~ time(mauna.train)), col = 2)
+  
+ts.plot(mauna.train.log, main = "Log transformed data", ylab=expression(log(Y[t])))
+  abline(reg=lm(mauna.train.log ~ time(mauna.train.log)), col = 2)
+```
+
+```{r set_output_variables, include=FALSE}
+y <- mauna.train
+y.tr <- mauna.train.log
+```
+  
+##2.3 Differencing  
+
+We will start by difference at lag 1 in order to remove the linear trend, and then recheck the shape of the data to see if any additional differencing will be beneficial. We will also pay attention to changes in the variances from differencing, as an increase in variance can be a sign of over differencing.  
+  
+  
+```{r diff.1.12, echo=FALSE, fig.align="center", fig.width=8, fig.height=3}
+# Difference at lag = 1 to remove trend component
+y1 = diff(y.tr, 1)
+var.y1 <- var(y1)
+
+#Plot differenced at Lag 1
+op <- par(mfrow = c(1,2))
+plot(y1, main = "Differenced at Lag 1",ylab = expression(nabla~Y[t]))
+  abline(reg=lm(y1~time(y1)), col = 2)
+  
+
+# Difference at lags 1 and 12
+y.diff = diff(y1, 12)
+var.diff <- var(y.diff)
+
+#Plot differenced at Lag 12
+plot(y.diff,main = "Differenced at Lag 12",ylab = expression(nabla^{12}~nabla~Y[t]))
+  abline(reg=lm(y.diff~time(y.diff)), col = 2)
+  
+print(noquote(paste("Differencing at lag 1 lowered the variance by" , format(var.log - var.y1, digits = 4))))  
+print(noquote(paste("Differencing at lags 1 and 12 lowered the variance by" , format(var.y1 - var.diff, digits = 4))))
+```
+  
+  After differencing at lag one, we have a horizontal mean, as desired, so the linear trend is now gone. We can see that the movements of the plot are not random, so there is still likely a component of seasonality. This can be helped by differencing a second time, this time at lag 12, since the data has a yearly cycle where it peaks in May and troughs in October.  
+  
+After the second round of differencing, the seasonality component now looks to be gone, and we have data that looks a lot like what you'd expect from Gaussian White Noise. Thus we now have stationary data that can be used for forecasting. Next, we will look at the ACF and PACF plots in order to identify components of suitable models.  
+  
+##2.4 Model Fitting
+
+The ACF and PACF plots start as a good start point for model fitment. Looking at the shape and significant points on the plots tell a lot about what will be a good choice for the AR and MA components, as well as possible seasonal components required. We can also use iterative processes in R to determine the necessary components based on different informational tests, such as AIC, AICc, BIC, and Yule-Walker equations for example. We will fit our second model using AICc. 
+  
+##2.4.1 ACF/PACF Model
+  
+  We begin by plotting the ACF and PACF, using the transformed training data.  
+  
+```{r afterdiff_acfplots, echo=FALSE, fig.align="center", fig.width=8, fig.height=4}
+op = par(mfrow = c(1,2))
+acf(y.diff,lag.max = 100,main = "")
+pacf(y.diff,lag.max = 100,main = "")
+title("Time Series with Trend/Seasonality Removed", line = -1, outer=TRUE)
+```
+  
+  The PACF shows clear lag spikes up tojust before lag 4, with nothing significant after that. That is indicitive of an AR(4) model. The ACF has also has a spike around lag 4 before cutting off, which indicates a possible MA(4) model. Our data set is clearly seasonal, so seasonal components are likely needed. The ACF tapers off slowly, while the PACF has clusters of lag spikes each year, which indicates an AR(1). We differenced the data twice to get stationarity, at lags 1 (trend) and lag 12 (seasonality), so d = D = 1 makes sense. Thus, from the plots, the model we chose is: $$ARIMA(4,1,4)\times(1,1,0)_{12}$$.  
+  
+###2.4.1.2 Diagnostic Testing of First Model  
+
+Next we'll proceed with diagnostic testing to make sure the model will be ok for forecasting. We're looking for residuals that approximate white noise, while also minimizing serial correlation. We will also check to ensure that the model is both causal and invertible by examining the roots of the characteristic polynomial.  
+
+```{r arima414, include=FALSE}
+fit_arima414 <- Arima(y.tr, order = c(4,1,4), seasonal = list(order = c(1,1,0), period = 12))
+res.414 <- fit_arima414$residuals
+fit_arima414
+```
+
+```{r fit.414.df, include=FALSE}
+#Generate variables to make a dataframe to neatly display a table in output.
+fit.414.coef <- fit_arima414$coef
+fit.414.se <- sqrt(diag(vcov(fit_arima414)))
+fit.414.df <- data.frame(fit.414.coef, fit.414.se)
+colnames(fit.414.df) <- c("Coefficients", "STD ERROR")
+```
+
+```{r fit.414.ktable, echo=FALSE}
+#Table of coefficients and std error
+kable(fit.414.df, caption = "ARIMA(4,1,4)x(1,1,0) Coefficients/Error")
+```
+  
+The model coefficients are all significant. Next, we will start diagnostics with a look at the residuals.
+
+```{r Diagnostic.plots.414, echo=FALSE, fig.align="center", fig.height=6, fig.width=7}
+op = par(mfrow = c(3,1))
+plot(res.414, main="Residuals Plot ARIMA(4,1,4)x(1,1,0)[12]")
+hist(res.414, main = "Histogram ARIMA(4,1,4)x(1,1,0)[12]", breaks = 6, freq = 0)
+qqnorm(res.414)
+
+st.414 <- shapiro.test(res.414)
+st414.p <- st.414$p.value
+
+box.414 <- Box.test(res.414, lag = 18, type=c("Ljung-Box"), fitdf = 8)
+box414.p <- box.414$p.value
+
+ar.414 <- ar(res.414, aic = TRUE, order.max = NULL, method = c("yule-walker"))
+ar414.order <- ar.414$order
+
+tests.414 <- data.frame(st414.p, box414.p, ar414.order)
+colnames(tests.414) <- c("Shapiro p", "Ljung-Box p", "Yule Walker Order")
+kable(tests.414, caption = "Residual Tests for ARIMA(4,1,4)x(1,1,0)")
+```
+  
+  It is clear that these plots are not optimal, and the Shapiro-Wilk p-value was nearly 0. The Yule-Walker equations fitted an AR(1) model to the residuals instead of the desired AR(0). There is a large spike at the start of the data set caused by the differencing. We will proceed by subsetting the residuals and not include the first years worth of data, as it's obviously not contributing to establishing a proper pattern for the data.
+  
+  
+```{r res414.sub, echo=FALSE, fig.align="center", fig.height=6, fig.width=7}
+res.414.sub <- window(res.414, start=c(1967,1), end=c(1979, 12))
+
+#Code for plots
+op = par(mfrow = c(3,1))
+plot(res.414.sub, main="Residuals Plot ARIMA(4,1,4)x(1,1,0)[12]")
+hist(res.414.sub, main = "Histogram ARIMA(4,1,4)x(1,1,0)[12]", breaks = 6, freq = 0)
+qqnorm(res.414.sub)
+
+#Code for Residuals Testing
+st.414.sub <- shapiro.test(res.414.sub)
+st414.p.sub <- st.414.sub$p.value
+
+box.414.sub <- Box.test(res.414.sub, lag = 18, type=c("Ljung-Box"), fitdf = 8)
+box414.p.sub <- box.414.sub$p.value
+
+ar.414.sub <- ar(res.414.sub, aic = TRUE, order.max = NULL, method = c("yule-walker"))
+ar414.order.sub <- ar.414.sub$order
+
+tests.414.sub <- data.frame(st414.p.sub, box414.p.sub, ar414.order.sub)
+colnames(tests.414.sub) <- c("Shapiro p", "Ljung-Box p", "Yule Walker Order")
+kable(tests.414.sub, caption = "Residual Tests for ARIMA(4,1,4)x(1,1,0) after Subset")
+```
+
+The results were much better this time, as the plots all looked approximately normal, and the p-values of the Shapiro-Wilks and Ljung-Box tests were all above 0.05, failing to reject normality of residuals. The residuals were also fitted to an AR(0) model by the Yule-Walker equation approximations, as desired. Next we'll check for homogeneity of variance using ACF and PACF plots of the residuals.
+
+```{r acf_pacf.sqr_res, echo=FALSE, fig.align="center", fig.width=8, fig.height=4}
+op = par(mfrow = c(1,2))
+acf(res.414^2,lag.max = 75,main = "")
+pacf(res.414^2,lag.max = 75,main = "")
+title("ARIMA(4,1,4)x(1,1,0) Squared Residuals", line = -1, outer=TRUE)
+```
+
+All residuals falling within confidence intervals implies residuals are homoscedastic as required. Last, we'll check the model for any unit roots to make sure it is causal and invertible, and suitable for forecasting.  
+
+```{r 414_ROOTS, include=FALSE}
+print(noquote(paste("AR Root")))
+polyroot(c(1, 0.077, 0.540, 0.159, -0.256))  
+AR.roots <- c(sqrt(.047^2+1.082^2), -1.581, sqrt(.047^2+1.082^2), 2.107)
+print(noquote(paste("MA Root")))
+polyroot(c(1, 0.141, -0.593, 0.117, 0.409))
+MA.roots <- c(sqrt(.047^2+1.082^2), -1.581, sqrt(.047^2+1.082^2), 2.107)
+print(noquote(paste("SAR Root")))
+polyroot(c(1, 0.492))
+
+AR.roots
+MA.roots
+```
+
+The AR roots are -1.581, 2.107, and a pair of complex conjugates with modulus 1.08.  
+The MA roots are two pairs of complex conjugates with moduli of 1.24 and 1.26.  
+The SAR root is -2.033.  
+
+Thus, all roots are outside of the unit circle, and the model has passed all of our diagnostics and is suitable for forecasting. WE now move on to a second model to compare to the first to see which is the best.  
+
+##2.4.2 Model Fitment with AICC  
+AICc is an extension of the Akaike information criterion (AIC), which corrects for relatively small sample size. We used a loop in R to generate the data frame below, which shows each component from 0 to 4 and their intersection is the corresponding AICc. We seek to minimize the function, so we're looking for the largest number in magnitude.  
+
+```{r AIC_loop, include=FALSE}
+mylist <- list() #create an empty list
+
+for (i in 0:4) {
+  vec <- numeric() #preallocate a numeric vector
+  for (j in 0:4) { 
+    temp <- AICc(Arima(y.diff, order = c(i,1,j), method = "ML"))
+    vec[j+1] <- temp 
+  }
+  mylist[[i+1]] <- vec #put all vectors in the list
+}
+
+AIC.df <- do.call("rbind",mylist) #combine all vectors into a matrix
+  rownames(AIC.df) <- c("AR0","AR1", "AR2", "AR3", "AR4")
+  colnames(AIC.df) <- c("MA0","MA1", "MA2", "MA3", "MA4")
+
+AIC.df
+```
+
+```{r AIcc.table, echo=FALSE}
+kable(AIC.df[,], format = 'pandoc',caption = "AICc's of ARMA(0,0) to ARMA(4,4)")
+```
+
+We set the number of differences to d = 1 (differenced one time for trend), and the best choice corresponding to AICc is an ARIMA(1,1,2) model, however a quick check shows that this model ends up producing an MA root inside of the unit circle and is therefore not invertible. Thus, we will choose an ARIMA(1,1,1) model due to the fact that it has a solid AICc while being a relatively simple model without a lot of parameters to estimate. We could have chosen one on the other models with a slightly smaller AICc, but our other model is already relatively large so we thought it would be better to choose a smaller model to compare.  
+
+
+```{r arima111, include=FALSE}
+fit_arima111 <- Arima(y.tr, order = c(1,1,1))
+res.111 <- fit_arima111$residuals
+fit_arima111
+```
+
+```{r fit.111.df, include=FALSE}
+fit.111.coef <- fit_arima111$coef
+fit.111.se <- sqrt(diag(vcov(fit_arima111)))
+fit.111.df <- data.frame(fit.111.coef, fit.111.se)
+colnames(fit.111.df) <- c("Coefficients", "STD ERROR")
+```
+
+```{r fit.111.ktable, echo=FALSE}
+kable(fit.111.df, caption = "ARIMA(1,1,1) Coefficients/Error")
+```  
+
+The model coefficients are all significant. We again look at the residuals and commence diagnostics.  
+  
+###2.4.2.2 Diagnostics of AICc Model  
+
+```{r Diagnostic.plots.111, echo=FALSE, fig.align="center", fig.height=6, fig.width=7}
+op = par(mfrow = c(3,1))
+plot(res.111, main="Residuals Plot ARIMA(1,1,1)")
+hist(res.111, main = "Histogram ARIMA(1,1,1)", breaks = 6, freq = 0)
+qqnorm(res.111)
+
+st.111 <- shapiro.test(res.111)
+st111.p <- st.111$p.value
+
+box.111 <- Box.test(res.111, lag = 18, type=c("Ljung-Box"), fitdf = 8)
+box111.p <- box.111$p.value
+
+ar.111 <- ar(res.111, aic = TRUE, order.max = NULL, method = c("yule-walker"))
+ar111.order <- ar.111$order
+
+tests.111 <- data.frame(st111.p, box111.p, ar111.order)
+colnames(tests.111) <- c("Shapiro p", "Ljung-Box p", "Yule Walker Order")
+kable(tests.111, caption = "Residual Tests for ARIMA(1,1,1)")
+```
+  
+  The histogram and Normal QQ plot look pretty good, but the data failed Box-Ljung which implies serial correlation, and had the residuals fitted to an AR(13) model instead of AR(0). Looking at the plot of residuals, there seems to be seasonality, so adding a seasonal component is likely in order. We will fit (P,D,Q) to (1,1,0) with the same justification as the ACF/PACF model above.  
+  
+```{r res111.seasonal, echo=FALSE}
+fit.arima111.s <- Arima(y.tr, order = c(1,1,1), seasonal = list(order = c(1,1,0), period = 12))
+res.111 <- fit.arima111.s$residuals
+res.111s <- window(res.111, start=c(1968,1), end=c(1979, 12))
+```
+
+```{r Diagnostic.plots.111.seas, echo=FALSE, fig.align="center", fig.height=6, fig.width=7}
+op = par(mfrow = c(3,1))
+plot(res.111s, main="Residuals Plot ARIMA(1,1,1)x(1,1,0)")
+hist(res.111s, main = "Histogram (1,1,1)x(1,1,0)", breaks = 6, freq = 0)
+qqnorm(res.111s)
+
+st.111 <- shapiro.test(res.111s)
+st111.p <- st.111$p.value
+
+box.111 <- Box.test(res.111s, lag = 18, type=c("Ljung-Box"), fitdf = 3)
+box111.p <- box.111$p.value
+
+ar.111 <- ar(res.111s, aic = TRUE, order.max = NULL, method = c("yule-walker"))
+ar111.order <- ar.111$order
+
+tests.111 <- data.frame(st111.p, box111.p, ar111.order)
+colnames(tests.111) <- c("Shapiro p", "Ljung-Box p", "Yule Walker Order")
+kable(tests.111, caption = "Residual Tests for ARIMA(1,1,1)x(1,1,0)")
+```
+
+Adding the seasonal component made the model perform very well. It has very high p-values for Ljung-Box and Shapiro-Wilk, and again the residuals fitted to an AR(0) which approximates white noise. 
+  
+
+```{r acf_pacf.sqr_res.111s, echo=FALSE, fig.align="center", fig.width=8, fig.height=4}
+op = par(mfrow = c(1,2))
+acf(res.111^2,lag.max = 20,main = "")
+pacf(res.111^2,lag.max = 20,main = "")
+title("ARIMA(1,1,1)x(1,1,0) ACF/PACF of Residuals", line = -1, outer=TRUE)
+```
+
+ACF and PACF of squared residuals have all values within confidence interval, which implies homoscedasticity.  
+
+```{r 111.s_ROOTS, include=FALSE}
+print(noquote(paste("AR Root")))
+polyroot(c(1, -0.517))  
+print(noquote(paste("MA Root")))
+polyroot(c(1, 0.718, 0.511))
+print(noquote(paste("SAR Root")))
+polyroot(c(1, -0.067))
+```
+
+Finally, a check of the roots shows that the model has an AR root of 1.93, a pair of conjugate MA roots with modulus of 1.40, and a SAR root of 14.92, which shows the model has passed all diagnotics and is invertible and causal. Thus, both models have proven to be sufficient for forecasting. We will proceed with the model chosen by AICc in order to keep with the principle of parsimony, as we don't want an overfitted model that will predict our training data well but not extend to new data sets.  
+  
+We now move on to forecasting. 
+  
+##2.5 Forecasting  
+  
+We set aside 12 months of observations which weren't touched for the model fitting/diagnostics, and we will see how well our model is able to predict those actual results.  
+
+###2.5.1  Forecasting Transformed Data  
+
+We start with plotting the transformed data, and adding in our predicted values.  
+
+```{r test.training.data, include=FALSE}
+#Casting data to numeric vectors to make handling the forecast data transformations easier
+mauna.train.cast <- as.numeric(mauna.train)
+mauna.cast.log <- log(mauna.train.cast)
+mauna.test.cast <- as.numeric(mauna.test)
+```
+
+
+```{r forecasting.transformed, echo=FALSE}
+
+pred.tr <- predict(fit.arima111.s, n.ahead = 12)
+Upper.tr= pred.tr$pred + 2*pred.tr$se # upper bound for the C.I. for transformed data
+Lower.tr= pred.tr$pred - 2*pred.tr$se # lower bound
+
+#Forecasting Transformed Data
+ts.plot(mauna.cast.log, xlim=c(140,length(mauna.cast.log)+12), ylim = c(5.78,max(Upper.tr)),
+        main = 'Predicted Values on Transformed Data',
+        ylab = 'CO2 (ppm)') #plot y.tr and forecast
+    lines((length(mauna.cast.log)+1):(length(mauna.cast.log)+12), pred.tr$pred+1.96*pred.tr$se,lty=2, col="blue") 
+    lines((length(mauna.cast.log)+1):(length(mauna.cast.log)+12), pred.tr$pred-1.96*pred.tr$se,lty=2, col="blue")
+    points((length(mauna.cast.log)+1):(length(mauna.cast.log)+12), pred.tr$pred, col="red")
+    points((length(mauna.cast.log)+1):(length(mauna.cast.log)+12), log(mauna.test.cast), pch = "*")
+    legend('topleft', bty = 'n', col = c('blue', 'red', 'black'), c('Conf. Int', 'Predicted Values', 'Actual Values'), 
+         pch = c("-", "o", "*"))
+```
+
+The predicted values (red circles) do a very good job of approximating the actual values (black '*'). The model extended to the test data very well and does a good job of predicting the proper values. Next, we'll rescale the data back to its original form so the predictions make more intuitive sense.  
+
+###2.5.2 Forecasting after undoing the Transformation
+
+
+```{r forecasting.original, echo=FALSE}
+pred.y1 <- predict(fit.arima111.s, n.ahead = 12)
+pred.y <- exp(pred.y1$pred)
+se.y   <- exp(pred.y1$se)#Undoing the log transform so predicted points are on proper scale
+Upper.y = exp(Upper.tr)
+Lower.y = exp(Lower.tr)
+
+
+#Going back to Original Data Scale
+ts.plot(mauna.train.cast, xlim=c(140,length(mauna.train.cast)+12), ylim = c(exp(5.78),max(Upper.y)),
+        ylab = "CO2 (ppm)", 
+        main = "Predicted Values on Original Data Scale")
+    lines((length(mauna.train.cast)+1):(length(mauna.train.cast)+12), pred.y+1.96*se.y,lty=2, col="blue") 
+    lines((length(mauna.train.cast)+1):(length(mauna.train.cast)+12), pred.y-1.96*se.y,lty=2, col="blue")
+    points((length(mauna.train.cast)+1):(length(mauna.train.cast)+12), pred.y, col="red")
+    points((length(mauna.train.cast)+1):(length(mauna.train.cast)+12), mauna.test.cast, pch = "*")
+    legend('topleft', bty = 'n', col = c('blue', 'red', 'black'), c('Conf. Int', 'Predicted Values', 'Actual Values'), 
+         pch = c("-", "o", "*"))
+```
+
+This plot is the exact same as the last, aside from rescaling the Y-axis. Again, the model did better than would be expected at forecasting. All values predicted values are very close to to their corresponding actual values. This model was a good fit to the data, and extended well.
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+#3. Conclusion Section. Reiterate your conclusions referring to the goals of your project. Were these goals achieved? Record the math formula for the model you chose. Acknowledge all individuals who helped you with this project.
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+\newpage
+
+#4. References.
+
+1. https://www.esrl.noaa.gov/gmd/ccgg/trends/
+2. https://www.otexts.org/fpp
+3. https://robjhyndman.com/categories/time-series/
+4. http://datamarket.com/data/list/?q=provider:tsdl) 
+5. https://www.google.com
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+\newpage
+#5. Appendix
+
+```{r data_import.a, message=FALSE, warning=FALSE, echo=T, eval=FALSE}
+#install.packages("forecast")
+#install.packages('qpcR')
+library(stats)
+library(forecast)
+library(qpcR)
+library(MASS)
+library(xtable)
+library(readr)
+library(knitr)
+
+co2 <- read_csv("https://docs.google.com/spreadsheets/d/e/2PACX-1vQulcZcSOK9l5iNKU_MsBvdDlgF0qdm9rJfqA3BAxc2Q19YxYsggmZMRRmOpXTbEU76vKAMz5R4RMiS/pub?output=csv", 
+    col_types = cols(month = col_skip()))
+
+mauna_loa <- ts(co2, frequency=12, start=c(1965,1))
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r, df.a, echo=T, eval=FALSE, results='asis'}
+mauna.raw <- matrix(mauna_loa, ncol=12, byrow=TRUE)
+mauna.raw.df<- as.data.frame(mauna.raw , stringsAsFactors=FALSE)
+colnames(mauna.raw.df) <-  c("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
+#rownames(mauna.raw.df) <- c(1965:1980)
+kable(mauna.raw.df, caption = "Raw Data")
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r test_training_data.a, echo=T, eval=FALSE}
+#Set up training data/test data. Saved last year (12 observations) for validation of model.
+#Training Data = first 15 years of data
+mauna.train <- window(mauna_loa, start=c(1965,1), end=c(1979, 12))
+#Validation data = last year (12 observations) of data
+mauna.test <- window(mauna_loa, start=c(1980,1))
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r plot_raw_data.a, echo=T, eval=FALSE}
+ts.plot(mauna_loa,main = "Raw data",ylab = 'CO2 (ppm)')
+  abline(reg=lm(mauna_loa ~ time(mauna_loa)), col = 2)
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r boc_cox.a, echo=T, eval=FALSE}
+bc = MASS::boxcox(lm(mauna.train ~ time(mauna.train)),plotit = TRUE)
+  lambda = bc$x[which(bc$y == max(bc$y))]
+mauna.train.bc = (1/lambda)*(mauna.train^lambda-1)
+lambda
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r log_transform.a, echo=T, eval=FALSE}
+mauna.train.log<-log(mauna.train)
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r sqrt_transform.a, echo=T, eval=FALSE}
+mauna.train.sqrt<-sqrt(mauna.train)
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r transform.var.a, echo=T, eval=FALSE}
+var.raw <- var(mauna.train)
+var.bc <- var(mauna.train.bc)
+var.log <- var(mauna.train.log)
+var.sqrt <- var(mauna.train.sqrt)
+
+variance <- c(format(var.raw, scientific = 0), var.sqrt, var.log, var.bc)
+variance <- as.data.frame(variance, row.names = c('Raw Data', 'Sqrt Transform', 'Log Transform', 'Box Cox'))
+variance
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r variance_table.a, echo=T, eval=FALSE}
+kable(variance, format = 'pandoc',caption = "Data Transformation Variances")
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r transform_plots.a, echo=T, eval=FALSE}
+op <- par(mfrow = c(1,2))
+ts.plot(mauna.train,main = "Raw data",ylab = expression(X[t]))
+  abline(reg=lm(mauna.train ~ time(mauna.train)), col = 2)
+  
+ts.plot(mauna.train.log, main = "Log transformed data", ylab=expression(log(Y[t])))
+  abline(reg=lm(mauna.train.log ~ time(mauna.train.log)), col = 2)
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r set_output_variables.a, echo=T, eval=FALSE}
+y <- mauna.train
+y.tr <- mauna.train.log
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r diff.1.12.a, echo=T, eval=FALSE}
+# Difference at lag = 1 to remove trend component
+y1 = diff(y.tr, 1)
+var.y1 <- var(y1)
+
+#Plot differenced at Lag 1
+op <- par(mfrow = c(1,2))
+plot(y1, main = "Differenced at Lag 1",ylab = expression(nabla~Y[t]))
+  abline(reg=lm(y1~time(y1)), col = 2)
+  
+
+# Difference at lags 1 and 12
+y.diff = diff(y1, 12)
+var.diff <- var(y.diff)
+
+#Plot differenced at Lag 12
+plot(y.diff,main = "Differenced at Lag 12",ylab = expression(nabla^{12}~nabla~Y[t]))
+  abline(reg=lm(y.diff~time(y.diff)), col = 2)
+  
+print(noquote(paste("Differencing at lag 1 lowered the variance by" , format(var.log - var.y1, digits = 4))))  
+print(noquote(paste("Differencing at lags 1 and 12 lowered the variance by" , format(var.y1 - var.diff, digits = 4))))
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r afterdiff_acfplots.a, echo=T, eval=FALSE}
+op = par(mfrow = c(1,2))
+acf(y.diff,lag.max = 100,main = "")
+pacf(y.diff,lag.max = 100,main = "")
+title("Time Series with Trend/Seasonality Removed", line = -1, outer=TRUE)
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r arima414.a, echo=T, eval=FALSE}
+fit_arima414 <- Arima(y.tr, order = c(4,1,4), seasonal = list(order = c(1,1,0), period = 12))
+res.414 <- fit_arima414$residuals
+fit_arima414
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r fit.414.df.a, echo=T, eval=FALSE}
+#Generate variables to make a dataframe to neatly display a table in output.
+fit.414.coef <- fit_arima414$coef
+fit.414.se <- sqrt(diag(vcov(fit_arima414)))
+fit.414.df <- data.frame(fit.414.coef, fit.414.se)
+colnames(fit.414.df) <- c("Coefficients", "STD ERROR")
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r fit.414.ktable.a, echo=T, eval=FALSE}
+#Table of coefficients and std error
+kable(fit.414.df, caption = "ARIMA(4,1,4)x(1,1,0) Coefficients/Error")
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r Diagnostic.plots.414.a, echo=T, eval=FALSE}
+op = par(mfrow = c(3,1))
+plot(res.414, main="Residuals Plot ARIMA(4,1,4)x(1,1,0)[12]")
+hist(res.414, main = "Histogram ARIMA(4,1,4)x(1,1,0)[12]", breaks = 6, freq = 0)
+qqnorm(res.414)
+
+st.414 <- shapiro.test(res.414)
+st414.p <- st.414$p.value
+
+box.414 <- Box.test(res.414, lag = 18, type=c("Ljung-Box"), fitdf = 8)
+box414.p <- box.414$p.value
+
+ar.414 <- ar(res.414, aic = TRUE, order.max = NULL, method = c("yule-walker"))
+ar414.order <- ar.414$order
+
+tests.414 <- data.frame(st414.p, box414.p, ar414.order)
+colnames(tests.414) <- c("Shapiro p", "Ljung-Box p", "Yule Walker Order")
+kable(tests.414, caption = "Residual Tests for ARIMA(4,1,4)x(1,1,0)")
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r res414.sub.a, echo=FALSE, echo=T, eval=FALSE}
+res.414.sub <- window(res.414, start=c(1967,1), end=c(1979, 12))
+
+#Code for plots
+op = par(mfrow = c(3,1))
+plot(res.414.sub, main="Residuals Plot ARIMA(3,1,3)x(1,1,0)[12]")
+hist(res.414.sub, main = "Histogram ARIMA(3,1,3)x(1,1,0)[12]", breaks = 6, freq = 0)
+qqnorm(res.414.sub)
+
+#Code for Residuals Testing
+st.414.sub <- shapiro.test(res.414.sub)
+st414.p.sub <- st.414.sub$p.value
+
+box.414.sub <- Box.test(res.414.sub, lag = 18, type=c("Ljung-Box"), fitdf = 8)
+box414.p.sub <- box.414.sub$p.value
+
+ar.414.sub <- ar(res.414.sub, aic = TRUE, order.max = NULL, method = c("yule-walker"))
+ar414.order.sub <- ar.414.sub$order
+
+tests.414.sub <- data.frame(st414.p.sub, box414.p.sub, ar414.order.sub)
+colnames(tests.414.sub) <- c("Shapiro p", "Ljung-Box p", "Yule Walker Order")
+kable(tests.414.sub, caption = "Residual Tests for ARIMA(4,1,4)x(1,1,0) after Subset")
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r acf_pacf.sqr_res.a,  echo=T, eval=FALSE}
+op = par(mfrow = c(1,2))
+acf(res.414^2,lag.max = 75,main = "")
+pacf(res.414^2,lag.max = 75,main = "")
+title("ARIMA(4,1,4)x(1,1,0) Squared Residuals", line = -1, outer=TRUE)
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r 414_ROOTS.a, echo=T, eval=FALSE}
+print(noquote(paste("AR Root")))
+polyroot(c(1, 0.077, 0.540, 0.159, -0.256))  
+AR.roots <- c(sqrt(.047^2+1.082^2), -1.581, sqrt(.047^2+1.082^2), 2.107)
+print(noquote(paste("MA Root")))
+polyroot(c(1, 0.141, -0.593, 0.117, 0.409))
+MA.roots <- c(sqrt(.047^2+1.082^2), -1.581, sqrt(.047^2+1.082^2), 2.107)
+print(noquote(paste("SAR Root")))
+polyroot(c(1, 0.492))
+
+AR.roots
+MA.roots
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r AIC_loop.a, echo=T, eval=FALSE}
+mylist <- list() #create an empty list
+
+for (i in 0:4) {
+  vec <- numeric() #preallocate a numeric vector
+  for (j in 0:4) { 
+    temp <- AICc(Arima(y.diff, order = c(i,1,j), method = "ML"))
+    vec[j+1] <- temp 
+  }
+  mylist[[i+1]] <- vec #put all vectors in the list
+}
+
+AIC.df <- do.call("rbind",mylist) #combine all vectors into a matrix
+  rownames(AIC.df) <- c("AR0","AR1", "AR2", "AR3", "AR4")
+  colnames(AIC.df) <- c("MA0","MA1", "MA2", "MA3", "MA4")
+
+AIC.df
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r AIcc.table.a, echo=T, eval=FALSE}
+kable(AIC.df[,], format = 'pandoc',caption = "AICc's of ARMA(0,0) to ARMA(4,4)")
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r arima111.a, echo=T, eval=FALSE}
+fit_arima111 <- Arima(y.tr, order = c(1,1,1))
+res.111 <- fit_arima111$residuals
+fit_arima111
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r fit.111.df.a, echo=T, eval=FALSE}
+fit.111.coef <- fit_arima111$coef
+fit.111.se <- sqrt(diag(vcov(fit_arima111)))
+fit.111.df <- data.frame(fit.111.coef, fit.111.se)
+colnames(fit.111.df) <- c("Coefficients", "STD ERROR")
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r fit.111.ktable.a,  echo=T, eval=FALSE}
+kable(fit.111.df, caption = "ARIMA(1,1,1) Coefficients/Error")
+```  
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r Diagnostic.plots.111.a, echo=T, eval=FALSE}
+op = par(mfrow = c(3,1))
+plot(res.111, main="Residuals Plot ARIMA(1,1,1)")
+hist(res.111, main = "Histogram ARIMA(1,1,1)", breaks = 6, freq = 0)
+qqnorm(res.111)
+
+st.111 <- shapiro.test(res.111)
+st111.p <- st.111$p.value
+
+box.111 <- Box.test(res.111, lag = 18, type=c("Ljung-Box"), fitdf = 8)
+box111.p <- box.111$p.value
+
+ar.111 <- ar(res.111, aic = TRUE, order.max = NULL, method = c("yule-walker"))
+ar111.order <- ar.111$order
+
+tests.111 <- data.frame(st111.p, box111.p, ar111.order)
+colnames(tests.111) <- c("Shapiro p", "Ljung-Box p", "Yule Walker Order")
+kable(tests.111, caption = "Residual Tests for ARIMA(1,1,1)")
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r res111.seasonal.a, echo=T, eval=FALSE}
+fit.arima111.s <- Arima(y.tr, order = c(1,1,1), seasonal = list(order = c(1,1,0), period = 12))
+res.111 <- fit.arima111.s$residuals
+res.111s <- window(res.111, start=c(1968,1), end=c(1979, 12))
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r Diagnostic.plots.111.seas.a, echo=T, eval=FALSE}
+op = par(mfrow = c(3,1))
+plot(res.111s, main="Residuals Plot ARIMA(1,1,1)x(1,1,0)")
+hist(res.111s, main = "Histogram (1,1,1)x(1,1,0)", breaks = 6, freq = 0)
+qqnorm(res.111s)
+
+st.111 <- shapiro.test(res.111s)
+st111.p <- st.111$p.value
+
+box.111 <- Box.test(res.111s, lag = 18, type=c("Ljung-Box"), fitdf = 3)
+box111.p <- box.111$p.value
+
+ar.111 <- ar(res.111s, aic = TRUE, order.max = NULL, method = c("yule-walker"))
+ar111.order <- ar.111$order
+
+tests.111 <- data.frame(st111.p, box111.p, ar111.order)
+colnames(tests.111) <- c("Shapiro p", "Ljung-Box p", "Yule Walker Order")
+kable(tests.111, caption = "Residual Tests for ARIMA(1,1,1)x(1,1,0)")
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r acf_pacf.sqr_res.111s.a, echo=T, eval=FALSE}
+op = par(mfrow = c(1,2))
+acf(res.111^2,lag.max = 20,main = "")
+pacf(res.111^2,lag.max = 20,main = "")
+title("ARIMA(1,1,1)x(1,1,0) ACF/PACF of Residuals", line = -1, outer=TRUE)
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r 111.s_ROOTS.a, echo=T, eval=FALSE}
+print(noquote(paste("AR Root")))
+polyroot(c(1, -0.517))  
+print(noquote(paste("MA Root")))
+polyroot(c(1, 0.718, 0.511))
+print(noquote(paste("SAR Root")))
+polyroot(c(1, -0.067))
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r test.training.data.a, echo=T, eval=FALSE}
+#Casting data to numeric vectors to make handling the forecast data transformations easier
+mauna.train.cast <- as.numeric(mauna.train)
+mauna.cast.log <- log(mauna.train.cast)
+mauna.test.cast <- as.numeric(mauna.test)
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r forecasting.transformed.a, echo=T, eval=FALSE}
+
+pred.tr <- predict(fit.arima111.s, n.ahead = 12)
+Upper.tr= pred.tr$pred + 2*pred.tr$se # upper bound for the C.I. for transformed data
+Lower.tr= pred.tr$pred - 2*pred.tr$se # lower bound
+
+#Forecasting Transformed Data
+ts.plot(mauna.cast.log, xlim=c(140,length(mauna.cast.log)+12), ylim = c(5.78,max(Upper.tr)),
+        main = 'Predicted Values on Transformed Data',
+        ylab = 'CO2 (ppm)') #plot y.tr and forecast
+    lines((length(mauna.cast.log)+1):(length(mauna.cast.log)+12), pred.tr$pred+1.96*pred.tr$se,lty=2, col="blue") 
+    lines((length(mauna.cast.log)+1):(length(mauna.cast.log)+12), pred.tr$pred-1.96*pred.tr$se,lty=2, col="blue")
+    points((length(mauna.cast.log)+1):(length(mauna.cast.log)+12), pred.tr$pred, col="red")
+    points((length(mauna.cast.log)+1):(length(mauna.cast.log)+12), log(mauna.test.cast), pch = "*")
+    legend('topleft', bty = 'n', col = c('blue', 'red', 'black'), c('Conf. Int', 'Predicted Values', 'Actual Values'), 
+         pch = c("-", "o", "*"))
+```
+
+\begin{center}\rule{\linewidth}{\linethickness}\end{center}
+
+```{r forecasting.original.a, echo=T, eval=FALSE}
+pred.y1 <- predict(fit.arima111.s, n.ahead = 12)
+pred.y <- exp(pred.y1$pred)
+se.y   <- exp(pred.y1$se)#Undoing the log transform so predicted points are on proper scale
+Upper.y = exp(Upper.tr)
+Lower.y = exp(Lower.tr)
+
+
+#Going back to Original Data Scale
+ts.plot(mauna.train.cast, xlim=c(140,length(mauna.train.cast)+12), ylim = c(exp(5.78),max(Upper.y)),
+        ylab = "CO2 (ppm)", 
+        main = "Predicted Values on Original Data Scale")
+    lines((length(mauna.train.cast)+1):(length(mauna.train.cast)+12), pred.y+1.96*se.y,lty=2, col="blue") 
+    lines((length(mauna.train.cast)+1):(length(mauna.train.cast)+12), pred.y-1.96*se.y,lty=2, col="blue")
+    points((length(mauna.train.cast)+1):(length(mauna.train.cast)+12), pred.y, col="red")
+    points((length(mauna.train.cast)+1):(length(mauna.train.cast)+12), mauna.test.cast, pch = "*")
+    legend('topleft', bty = 'n', col = c('blue', 'red', 'black'), c('Conf. Int', 'Predicted Values', 'Actual Values'), 
+         pch = c("-", "o", "*"))
+```
+
+
+
+
+
+
+
+
+
+
+
+
